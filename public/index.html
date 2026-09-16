@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Construction AI — Unified Converter</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+:root{--bg:#0a0e16;--panel:#141b28;--line:#222d40;--text:#e6edf7;--muted:#8fa0b8;--accent:#4ea1ff;--ok:#3ad29f;--warn:#f5a623;--err:#ff5b6e}
+*{box-sizing:border-box}body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+header{padding:16px 24px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}h1{margin:0;font-size:15px}
+.stats{display:flex;gap:18px;font-size:12px;color:var(--muted);flex-wrap:wrap}.stats b{color:var(--accent);font-size:14px}
+main{max-width:1500px;margin:0 auto;padding:20px;display:grid;gap:16px;grid-template-columns:1fr}@media(min-width:1100px){main{grid-template-columns:380px 1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}.panel h2{margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}
+input[type=file]{width:100%;background:#0f1521;border:1px dashed var(--line);padding:14px;border-radius:10px;color:var(--text)}
+button{width:100%;background:var(--accent);color:#04101f;font-weight:650;border:0;padding:11px;border-radius:9px;cursor:pointer;margin-top:10px;font-size:13px}button.secondary{background:#243349;color:var(--text)}button:disabled{opacity:.5;cursor:not-allowed}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--muted);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.08em}td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10px;background:#1e2a3e;color:#9fc1ff;text-transform:uppercase}.pill.ok{background:#0f3d2e;color:var(--ok)}.pill.warn{background:#3d2f0f;color:var(--warn)}.pill.err{background:#3d0f14;color:var(--err)}
+.empty{color:var(--muted);padding:24px 0;text-align:center}.log{font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);max-height:280px;overflow:auto;background:#0b1018;padding:10px;border-radius:8px;border:1px solid var(--line);margin-top:8px}
+.coverage{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;margin-bottom:12px}.coverage .card{background:#0f1521;border:1px solid var(--line);padding:8px;border-radius:8px;text-align:center}.coverage .card b{display:block;font-size:16px;color:var(--accent)}.coverage .card span{font-size:10px;color:var(--muted);text-transform:uppercase}
+details{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:8px;background:#0f1521}summary{cursor:pointer;padding:4px 0}details[open]>summary{margin-bottom:8px;border-bottom:1px solid var(--line);padding-bottom:8px}.slice-tag{font-size:9px;padding:1px 6px;border-radius:3px;background:#1e2a3e;color:#9fc1ff;margin-right:4px}.note{font-size:11px;line-height:1.45;color:var(--muted);margin-top:10px}.row{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row button{margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🏗️ Construction AI — Unified Converter v3.1</h1>
+  <div class="stats">
+    <div>Files: <b id="s-files">0</b></div><div>CSI Entries: <b id="s-entries">0</b></div><div>Fully integrated: <b id="s-full">0</b></div><div>OCR/Cycle: <b id="s-cycle">0</b></div><div>Conflicts: <b id="s-conf">0</b></div>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2>Upload Any Document</h2>
+    <input id="file" type="file" multiple accept=".pdf,.dxf">
+    <button id="btn-upload">Parse + Merge</button>
+    <div class="row"><button id="btn-json" class="secondary" disabled>Download JSON</button><button id="btn-csv" class="secondary" disabled>Download CSV</button></div>
+    <div class="row"><button id="btn-conf" class="secondary" disabled>Show Conflicts</button><button id="btn-report" class="secondary" disabled>QS Report</button></div>
+    <button id="btn-reset" class="secondary">Reset Workspace</button>
+    <div class="note">Serverless-safe flow: each file is parsed independently, structured slices stay in this browser session, and <code>/api/merge</code> builds the integrated project. Scanned PDF pages use browser OCR when server-side Tesseract is unavailable.</div>
+    <div class="log" id="log">Ready. Upload BOQ, Specs, Contract, Hoarding and Drawings.</div>
+  </section>
+  <section class="panel">
+    <h2>Integrated Project</h2>
+    <div id="coverage" class="coverage"></div>
+    <div id="out"><div class="empty">Upload documents to see the integrated view.</div></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let slices = [];
+let integratedData = null;
+const esc = v => String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+function log(msg, cls=''){const color=cls==='ok'?'#3ad29f':cls==='warn'?'#f5a623':cls==='err'?'#ff5b6e':'#8fa0b8';$('log').innerHTML += `<div style="color:${color}">${new Date().toLocaleTimeString()} · ${esc(msg)}</div>`;$('log').scrollTop=$('log').scrollHeight;}
+async function postFile(url, file){const fd=new FormData();fd.append('file',file);const r=await fetch(url,{method:'POST',body:fd});if(!r.ok)throw new Error(`HTTP ${r.status}: ${await r.text()}`);return r.json();}
+async function clientOcr(file, parsed){const pages=parsed.client_ocr_pages||[];if(!pages.length)return;if(!window.Tesseract){log(`${file.name}: browser OCR library unavailable`, 'warn');return;}for(const page of pages){log(`${file.name} · page ${page}: browser OCR…`);const fd=new FormData();fd.append('file',file);const r=await fetch(`/api/cycle/run?page=${page-1}`,{method:'POST',body:fd});if(!r.ok){log(`${file.name} · page ${page}: cycle failed`, 'err');continue;}const cyc=await r.json();if(!cyc.needs_client_ocr||!cyc.png_b64)continue;const result=await Tesseract.recognize(`data:image/png;base64,${cyc.png_b64}`,'eng',{logger:m=>{if(m.status==='recognizing text'&&m.progress>0.95)log(`${file.name} · page ${page}: OCR ${Math.round(m.progress*100)}%`);}});const cr=await fetch('/api/classify-text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:file.name,page,text:result.data.text})});if(!cr.ok)continue;const classified=await cr.json();parsed.payload.elements.push(...(classified.elements||[]));log(`${file.name} · page ${page}: ${classified.elements?.length||0} CSI hits from client OCR`, 'ok');}}
+async function mergeSlices(){if(!slices.length)return;const r=await fetch('/api/merge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slices})});if(!r.ok)throw new Error(`merge HTTP ${r.status}: ${await r.text()}`);integratedData=await r.json();render(integratedData);$('btn-json').disabled=$('btn-csv').disabled=$('btn-conf').disabled=false;$('btn-report').disabled=!slices.some(s=>s.doc_type==='boq');}
+$('btn-upload').onclick=async()=>{const files=Array.from($('file').files);if(!files.length)return alert('Choose files');$('btn-upload').disabled=true;for(const f of files){try{log(`Parsing ${f.name}…`);const parsed=await postFile('/api/parse',f);if(parsed.doc_type==='drawing'&&parsed.client_ocr_pages?.length)await clientOcr(f,parsed);slices.push({filename:parsed.filename,doc_type:parsed.doc_type,payload:parsed.payload});const s=parsed.summary||{};log(`✓ ${f.name} — ${parsed.doc_type}${s.line_items!==undefined?` · items=${s.line_items}`:''}${s.sections_found!==undefined?` · sections=${s.sections_found}`:''}${s.elements!==undefined?` · drawing hits=${s.elements}`:''}`,'ok');}catch(e){log(`✗ ${f.name} — ${e.message}`,'err');}}try{await mergeSlices();}catch(e){log(`Merge failed — ${e.message}`,'err');}$('btn-upload').disabled=false;};
+$('btn-json').onclick=()=>download('integrated_project.json',JSON.stringify(integratedData,null,2),'application/json');
+$('btn-csv').onclick=()=>{if(!integratedData)return;let csv='Bridge,CSI,Division,Title,Unit,Qty,DrawingHits,Conflicts\n';for(const e of integratedData.entries||[]){const vals=[e.bridge||'',e.csi_code,e.division,e.csi_title,e.boq_unit||'',e.boq_total_quantity||0,e.drawing_count||0,(e.conflicts||[]).length].map(v=>`"${String(v).replaceAll('"','""')}"`);csv+=vals.join(',')+'\n';}download('integrated_project.csv',csv,'text/csv');};
+$('btn-conf').onclick=()=>renderConflicts(integratedData);
+$('btn-report').onclick=async()=>{const r=await fetch('/api/report/from-slices',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slices})});if(!r.ok)return log(`QS report failed: HTTP ${r.status}`,'err');const d=await r.json();$('out').innerHTML=`<pre style="white-space:pre-wrap;font-size:11px">${esc(JSON.stringify(d,null,2))}</pre>`;};
+$('btn-reset').onclick=async()=>{slices=[];integratedData=null;await fetch('/api/reset',{method:'POST'}).catch(()=>{});location.reload();};
+function download(name,data,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
+function render(data){const c=data.coverage||{},cs=data.cycle_stats||{};$('s-files').textContent=data.total_files||0;$('s-entries').textContent=c.total_csi_entries||0;$('s-full').textContent=c.fully_integrated||0;$('s-cycle').textContent=(cs.cycle_sourced_elements||0)+(cs.client_ocr_sourced_elements||0);$('s-conf').textContent=c.conflicts_found||0;const cov=$('coverage');cov.innerHTML='';for(const [label,val] of [['CSI entries',c.total_csi_entries||0],['With spec',c.with_spec||0],['With BOQ',c.with_boq||0],['With drawing',c.with_drawing||0],['With contract',c.with_contract||0],['Fully integrated',c.fully_integrated||0],['OCR/Cycle',(cs.cycle_sourced_elements||0)+(cs.client_ocr_sourced_elements||0)],['Conflicts',c.conflicts_found||0]])cov.innerHTML+=`<div class="card"><b>${val}</b><span>${esc(label)}</span></div>`;const byDiv={};for(const e of data.entries||[])(byDiv[e.division]??=[]).push(e);let html='';for(const div of Object.keys(byDiv).sort()){const entries=byDiv[div];html+=`<details open><summary><span class="pill">Div ${esc(div)}</span>&nbsp;<b>${esc(entries[0]?.csi_title||'')}</b>&nbsp;<span style="color:var(--muted);font-size:11px">(${entries.length} entries)</span></summary>`;for(const e of entries){const tags=Object.entries(e.completeness||{}).filter(([,v])=>v).map(([k])=>`<span class="slice-tag">${esc(k.replace('has_',''))}</span>`).join('');html+=`<details style="margin-left:16px"><summary><code>${esc(e.csi_code)}</code> ${e.bridge?`<span class="pill warn">${esc(e.bridge)}</span>`:''} ${e.boq_unit?`<span class="pill">${esc(e.boq_total_quantity)} ${esc(e.boq_unit)}</span>`:''} ${e.drawing_count?`<span class="pill ok">${e.drawing_count} drawing hits</span>`:''} ${e.conflicts?.length?`<span class="pill err">${e.conflicts.length} conflicts</span>`:''}<div style="margin-top:4px">${tags}</div></summary>`;if(e.spec_sections?.length){html+='<div style="font-size:11px;color:var(--muted)">📘 Specs:</div><ul>';for(const s of e.spec_sections.slice(0,3))html+=`<li><b>${esc(s.code)}</b> ${esc(s.title)}</li>`;html+='</ul>';}if(e.boq_items?.length){html+='<div style="font-size:11px;color:var(--muted)">💰 BOQ:</div><table><thead><tr><th>Description</th><th>Unit</th><th>Qty</th></tr></thead><tbody>';for(const it of e.boq_items.slice(0,5))html+=`<tr><td>${esc((it.description||'').slice(0,120))}</td><td>${esc(it.unit)}</td><td class="num">${esc(it.quantity)}</td></tr>`;html+='</tbody></table>';}if(e.drawing_elements?.length){html+=`<div style="font-size:11px;color:var(--muted);margin-top:8px">📐 Drawings (${esc((e.drawing_sheets||[]).join(', '))}):</div><ul>`;for(const el of e.drawing_elements.slice(0,5))html+=`<li>${esc(el.text||el.type)} <span style="color:var(--muted)">(${esc(el.source)})</span></li>`;html+='</ul>';}if(e.contract_references?.length){html+='<div style="font-size:11px;color:var(--muted)">📜 Contract:</div><ul>';for(const ref of e.contract_references.slice(0,3))html+=`<li><b>${esc(ref.term)}</b>: ${esc((ref.excerpt||'').slice(0,140))}</li>`;html+='</ul>';}if(e.conflicts?.length){html+='<div style="font-size:11px;color:var(--err)">⚠ Conflicts:</div><ul style="color:var(--err)">';for(const x of e.conflicts)html+=`<li>${esc(x)}</li>`;html+='</ul>';}html+='</details>';}html+='</details>';}$('out').innerHTML=html||'<div class="empty">No integrated entries yet.</div>';}
+function renderConflicts(data){const conflicts=[];for(const e of data?.entries||[])if(e.conflicts?.length)conflicts.push(e);if(!conflicts.length){$('out').innerHTML='<div class="empty">No conflicts detected.</div>';return;}let html=`<h3>Conflicts (${conflicts.length} CSI entries)</h3>`;for(const e of conflicts){html+=`<details open><summary><code>${esc(e.csi_code)}</code> ${esc(e.bridge||'')}</summary><ul>`;for(const msg of e.conflicts)html+=`<li>${esc(msg)}</li>`;html+='</ul></details>';}$('out').innerHTML=html;}
+</script>
+</body>
+</html>
